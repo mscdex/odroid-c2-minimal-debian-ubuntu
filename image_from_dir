@@ -1,0 +1,427 @@
+#!/bin/bash
+
+# *****************************************************
+# Creates odroid C2 image from local directory        *
+# created with "create_odroid_image                   *
+# *****************************************************
+
+# =====================================================
+# ==== P A R A M E T E R S ============================
+# =====================================================
+
+# *****************************************************
+# Set FAT partition size in MB                        *
+# *****************************************************
+fatsize=128
+
+# ******************************************************
+# Linux partition will be formatted as btrfs filesystem *
+# if  _btrfs="yes", otherwyse as ext4                  *
+# ******************************************************
+_btrfs="no"
+
+# *****************************************************
+# Set path to odroid u-boot files                     *
+# *****************************************************
+BL1="uboot/bl1.bin.hardkernel"
+UBOOT="uboot/u-boot.bin"
+
+
+# ******************************************************
+# To xz compress the image after creation              *
+# and make the md5sum file set  _compress="yes"        *
+# ******************************************************
+_compress="no"
+
+# ^^^^ P A R A M E T E R S ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+if [ "$(id -u)" != "0" ]; then
+   echo "Script must be run as root !"
+   exit 0
+fi
+
+
+echo ""
+date
+echo "=================================================="
+echo "Creating Ubuntu/Debian SD Card image for Odroid-C2"
+echo "=================================================="
+echo ""
+
+_DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+cd $_DIR
+
+# ********************************************************
+# Linux partition size IS CALCULATED from directory size *
+# ********************************************************
+_ext4size=`du -s $1 | awk '{print $1}'`
+ext4sizeMB=$(expr $_ext4size / 1024)
+ext4size=$(expr $ext4sizeMB / 2 + $ext4sizeMB)
+
+
+idir=$1
+sdcard="$1.img"
+_boot_on_ext4="$2"
+
+
+if [ "${_boot_on_ext4}" = "" ]; then
+    _boot_on_ext4="no"
+fi
+
+# ===================================================
+if [ "${1}" = "" ]; then
+    echo "Directory not specified."
+    echo "USAGE: image_from_dir <directory> [yes|no]"
+    echo "  yes|no - create or not ext4 only system"
+    exit 0
+fi
+
+if [ ! -d $idir ]; then
+    echo "Directory not found."
+    echo "USAGE: image_from_dir <directory> [yes|no]"
+    echo "  yes|no - create or not ext4 only system"
+    exit 0
+fi
+# ===================================================
+
+
+if [ ! -f $BL1 ]; then
+    echo "Error: $BL1 is not exist."
+    exit 1
+fi
+
+if [ ! -f $UBOOT ]; then
+    echo "Error: $UBOOT is not exist."
+    exit 1
+fi
+
+
+if [ "${_btrfs}" = "yes" ]; then
+    _boot_on_ext4="no"
+fi
+odir="_extdir"
+bootdir="_fatdir"
+
+# === Show info ===============
+echo "    from: $idir"
+echo "      to: $sdcard"
+echo "ext4boot: $_boot_on_ext4"
+echo "   btrfs: $_btrfs"
+echo "dir size: $ext4sizeMB"
+echo "img size: $ext4size"
+echo ""
+
+# ==============================================
+# PREPARE SD CARD IMAGE FOR ODROID - UBUNTU BOOT
+# ==============================================
+
+# remove old image files
+rm ${sdcard} > /dev/null 2>&1
+rm ${sdcard}1 > /dev/null 2>&1
+rm ${sdcard}2 > /dev/null 2>&1
+rm ${sdcard}u > /dev/null 2>&1
+if [ "${_compress}" = "yes" ]; then 
+    rm ${sdcard}.md5sum > /dev/null 2>&1
+    rm ${sdcard}.xz > /dev/null 2>&1
+    rm ${sdcard}.xz.md5sum > /dev/null 2>&1
+fi
+
+if [ "${_boot_on_ext4}" = "yes" ] ; then
+    _ersz=$(expr $ext4size + 2)
+else
+    _ersz=$(expr $fatsize + $ext4size + 2)
+fi
+
+echo "Creating bootable SD card image $sdcard, please wait ..."
+echo ""
+dd if=/dev/zero of=${sdcard} bs=1M count=$_ersz > /dev/null 2>&1
+echo "Creating partition images, please wait ..."
+if [ "${_boot_on_ext4}" = "yes" ] ; then
+    dd if=/dev/zero of=${sdcard}1 bs=1M count=$ext4size > /dev/null 2>&1
+else
+    dd if=/dev/zero of=${sdcard}1 bs=1M count=$fatsize > /dev/null 2>&1
+    dd if=/dev/zero of=${sdcard}2 bs=1M count=$ext4size > /dev/null 2>&1
+fi
+sync
+sleep 2
+
+# Create msdos partition table
+echo ""
+echo "Creating new filesystem on $sdcard..."
+echo -e "o\nw" | fdisk ${sdcard} > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "ERROR."
+    exit 0
+fi
+sync
+echo "  New filesystem created on SD card."
+
+echo ""
+echo "Partitioning SD card $sdcard..."
+
+if [ "${_boot_on_ext4}" = "yes" ] ; then
+    echo "  Creating linux partition"
+    sext4=3072
+    if [ $ext4size == 0 ]; then
+		eext4=""
+    else
+		eext4=$(expr $ext4size \* 1024 \* 1024 / 512 + $sext4 - 1)
+    fi
+	echo -e "n\np\n1\n$sext4\n$eext4\nt\n83\nw" | fdisk ${sdcard} > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+		echo "ERROR."
+		exit 0
+    fi
+else
+    sfat=3072
+    efat=$(expr $fatsize \* 1024 \* 1024 / 512 + $sfat - 1)
+    echo "  Creating fat & linux partitions"
+    sext4=$(expr $efat + 1)
+    if [ $ext4size == 0 ]; then
+		eext4=""
+    else
+		eext4=$(expr $ext4size \* 1024 \* 1024 / 512 + $sext4 - 1)
+    fi
+    echo -e "n\np\n1\n$sfat\n$efat\nn\np\n2\n$sext4\n$eext4\nt\n1\n6\nt\n2\n83\nw" | fdisk ${sdcard} > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+		echo "ERROR."
+		exit 0
+    fi
+fi
+echo "  OK."
+sync
+sleep 2
+#echo -e "p\nq\n" | fdisk ${sdcard}
+
+_mntopt=""
+echo ""
+if [ ! "${_boot_on_ext4}" = "yes" ] ; then
+    echo "formatting fat partition ..."
+    mkfs -t vfat -n BOOT ${sdcard}1 > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+	echo "ERROR formatting fat partition."
+	exit 1
+    fi
+    echo "  fat partition formatted."
+    vfatuuid=`blkid -s UUID -o value ${sdcard}1`
+    echo "formatting linux partition, please wait ..."
+    if [ "${_btrfs}" = "yes" ] ; then
+        # format as btrfs
+	mkfs.btrfs -f -L linux_b ${sdcard}2 > /dev/null 2>&1
+	if [ $? -ne 0 ]; then
+	    echo "ERROR formatting btrfs linux partition."
+	    exit 1
+	fi
+        _mntopt="-o compress-force=lzo"
+    else
+	mkfs -F -t ext4 -L linux ${sdcard}2 > /dev/null 2>&1
+	if [ $? -ne 0 ]; then
+	    echo "ERROR formatting ext4 partition."
+	    exit 1
+	fi
+	#tune2fs -o journal_data_writeback ${sdcard}2 > /dev/null 2>&1
+	#if [ $? -ne 0 ]; then
+	#    echo "ERROR tuning ext4 partition."
+	#    exit 1
+	#fi
+	#tune2fs -O ^has_journal ${sdcard}2 > /dev/null 2>&1
+	#f [ $? -ne 0 ]; then
+	#    echo "ERROR tuning ext4 partition."
+	#    exit 1
+	#fi
+    fi
+    ext4uuid=`blkid -s UUID -o value ${sdcard}2`
+else
+    echo "formatting linux partition, please wait ..."
+    if [ "${_btrfs}" = "yes" ] ; then
+        # format as btrfs
+	mkfs.btrfs -f -L linux_b ${sdcard}1 > /dev/null 2>&1
+	if [ $? -ne 0 ]; then
+	    echo "ERROR formatting btrfs linux partition."
+	    exit 1
+	fi
+        _mntopt="-o compress-force=lzo"
+    else
+	mkfs -F -t ext4 -L linux ${sdcard}1 > /dev/null 2>&1
+	if [ $? -ne 0 ]; then
+	    echo "ERROR formatting linux partition."
+	    exit 1
+	fi
+	#tune2fs -o journal_data_writeback ${sdcard}1 > /dev/null 2>&1
+	#if [ $? -ne 0 ]; then
+	#    echo "ERROR tuning ext4 partition."
+	#    exit 1
+	#fi
+	#tune2fs -O ^has_journal ${sdcard}1 > /dev/null 2>&1
+	#if [ $? -ne 0 ]; then
+	#    echo "ERROR tuning ext4 partition."
+	#    exit 1
+	#fi
+    fi
+    ext4uuid=`blkid -s UUID -o value ${sdcard}1`
+fi
+echo "  linux partition formatted."
+
+echo ""
+echo "installing u-boot to $sdcard ..."
+dd if=$BL1 of=${sdcard} bs=1 count=442 conv=fsync > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "ERROR installing u-boot."
+    exit 0
+fi
+dd if=$BL1 of=${sdcard} bs=512 skip=1 seek=1 conv=fsync > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "ERROR installing u-boot."
+    exit 0
+fi
+dd if=$UBOOT of=${sdcard} bs=512 seek=97 conv=fsync > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "ERROR installing u-boot."
+    exit 0
+fi
+sync
+
+dd if=${sdcard} of=${sdcard}u bs=512 count=3072 > /dev/null 2>&1
+rm ${sdcard}
+echo "U-boot installed to $sdcard."
+# -------------------------------------------------------------------
+
+# -------------------------------------------------------------------
+    
+if [ ! "${_boot_on_ext4}" = "yes" ] ; then
+    if [ ! -d $bootdir ]; then
+	mkdir -p $bootdir
+    fi
+    rm $bootdir/* > /dev/null 2>&1
+    sync
+    umount $bootdir > /dev/null 2>&1
+fi
+
+if [ ! -d $odir ]; then
+    mkdir -p $odir
+fi
+rm -rf $odir/* > /dev/null 2>&1
+sync
+umount $odir > /dev/null 2>&1
+sleep 1
+
+# ================
+# MOUNT PARTITIONS
+# ================
+echo ""
+echo "Mounting SD Card partitions..."
+
+if [ ! "${_boot_on_ext4}" = "yes" ] ; then
+    if ! mount ${sdcard}1 $bootdir; then
+	echo "ERROR mounting fat partitions..."
+	exit 1
+    fi
+    if ! mount ${_mntopt} ${sdcard}2 $odir; then
+	echo "ERROR mounting linux partitions..."
+	umount $bootdir
+	exit 1
+    fi
+    echo "FAT partitions mounted to $odir & $bootdir"
+else
+    if ! mount ${_mntopt} ${sdcard}1 $odir; then
+	echo "ERROR mounting linux partitions..."
+	exit 1
+    fi
+fi
+echo "linux partition mounted to $odir"
+
+
+#-----------------------------------------------------------------------------------------------
+echo ""
+echo "Copying files to image ..."
+if [ ! "${_boot_on_ext4}" = "yes" ] ; then
+    cp $idir/boot/* $bootdir
+fi
+rsync -r -t -p -o -g -x --delete -l -H -D --numeric-ids -s --stats $PWD/$idir/ $PWD/$odir/
+echo ""
+if [ ! "${_boot_on_ext4}" = "yes" ] ; then
+    mkdir -p $odir/media/boot
+fi
+sync
+
+# ***************
+# Create fstab
+# ***************
+echo "Creating \"fstab\""
+echo "# Odroid fstab" > $odir/etc/fstab
+echo "" >> $odir/etc/fstab
+if [ "${_btrfs}" = "yes" ] ; then
+    echo "UUID=$ext4uuid  /  btrfs  noatime,nodiratime,compress=lzo  0 1" >> $odir/etc/fstab
+else
+#    echo "#UUID=$ext4uuid  /  ext4  errors=remount-ro,noatime,nodiratime,data=writeback  0 1" >> $odir/etc/fstab
+    echo "UUID=$ext4uuid  /  ext4  errors=remount-ro,noatime,nodiratime  0 1" >> $odir/etc/fstab
+fi
+if [ ! "${_boot_on_ext4}" = "yes" ] ; then
+    echo "UUID=${vfatuuid}  /media/boot  vfat  defaults,rw,owner,flush,umask=000  0 0" >> $odir/etc/fstab
+fi
+echo "tmpfs /tmp  tmpfs nodev,nosuid,mode=1777  0 0" >> $odir/etc/fstab
+#-----------------------------------------------------------------------------------------------
+
+
+# ******************************
+# CREATE Odroid-C2 boot.ini file
+# You can modify parameters
+# ******************************
+if [ "${_boot_on_ext4}" = "yes" ] ; then
+    _ul1="ext4load mmc 0:1 \${loadaddr} boot/uImage"
+    _ul2="ext4load mmc 0:1 \${initrd_loadaddr} boot/uInitrd"
+    _ul3="ext4load mmc 0:1 \${dtb_loadaddr} boot/meson64_odroidc2.dtb"
+    _bootd="$odir/boot/boot.ini"
+else
+    _ul1="fatload mmc 0:1 \${loadaddr} uImage"
+    _ul2="fatload mmc 0:1 \${initrd_loadaddr} uInitrd"
+    _ul3="fatload mmc 0:1 \${dtb_loadaddr} meson64_odroidc2.dtb"
+    _bootd="$bootdir/boot.ini"
+fi
+
+. uboot_config.sh
+
+
+if [ ! "${_boot_on_ext4}" = "yes" ] ; then
+  if ! umount $bootdir; then
+      echo "ERROR unmounting fat partition."
+      exit 0
+  fi
+  rm -rf $bootdir/* > /dev/null 2>&1
+  rmdir $bootdir > /dev/null 2>&1
+fi  
+if ! umount $odir; then
+    echo "ERROR unmounting linux partitions."
+    exit 0
+fi
+rm -rf $odir/* > /dev/null 2>&1
+rmdir $odir > /dev/null 2>&1
+sync
+
+echo "Creating SDCard image..."
+dd if=${sdcard}u of=${sdcard} > /dev/null 2>&1
+if [ -f ${sdcard}1 ]; then
+    dd if=${sdcard}1 of=${sdcard} bs=1M conv=notrunc oflag=append > /dev/null 2>&1
+fi
+if [ -f ${sdcard}2 ]; then
+    dd if=${sdcard}2 of=${sdcard} bs=1M conv=notrunc oflag=append > /dev/null 2>&1
+fi
+
+if [ "${_compress}" = "yes" ]; then 
+    echo "Compressing image..."
+    xz -z -k -9 -f -v $sdcard
+    md5sum $sdcard > $sdcard.md5sum
+    md5sum $sdcard.xz > $sdcard.xz.md5sum
+fi
+
+echo ""
+date
+echo ""
+echo "*********************"
+echo "SDCard image created."
+echo "*********************"
+echo ""
+
+exit 0

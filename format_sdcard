@@ -1,0 +1,251 @@
+#!/bin/bash
+
+
+if [ "$(id -u)" != "0" ]; then
+   echo "Script must be run as root !"
+   exit 0
+fi
+
+echo ""
+date
+echo "***********************************"
+echo "Creating Odroid-C2 bootable SD Card"
+echo "***********************************"
+echo ""
+
+# =====================================================
+# ==== P A R A M E T E R S ============================
+# =====================================================
+
+# ================================================
+# IF YOU WANT TO HAVE BOOT FILES ON EXT4 PARTITION
+# AND NOT ON SEPARATE FAT16 PARTITION
+# set _boot_on_ext4="yes"
+# ================================================
+_boot_on_ext4="no"
+
+
+# *****************************************************
+# Set sdcard block device, e.g. sdc, sdi, ...
+# You can check with sudo blkid which drive to use
+# Partitions on SDCard MUST be UNMOUNTED
+# *****************************************************
+sdcard="sdd"
+
+
+# *****************************************************
+# Set file systems uuid's for boot and fstab
+# *****************************************************
+vfatuuid="6E355356"
+ext4uuid="e139ce78-9841-40fe-8823-96a304a09859"
+
+
+# *****************************************************
+# SD Card partitions sizes in MB (1024 * 1024 bytes)
+# set  ext4size=0  to extend ext4 partition
+# to the end of SDCard
+# *****************************************************
+fatsize=128
+ext4size=0
+
+
+# *****************************************************
+# Path to odroid u-boot files
+# *****************************************************
+BL1="uboot/bl1.bin.hardkernel"
+UBOOT="uboot/u-boot.bin"
+
+# ^^^^ P A R A M E T E R S ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+if [ ! -f $BL1 ]; then
+    echo "Error: $BL1 is not exist."
+    exit 0
+fi
+
+if [ ! -f $UBOOT ]; then
+    echo "Error: $UBOOT is not exist."
+    exit 0
+fi
+
+
+# ==================================
+# PREPARE SD CARD FOR ODROID-C2 BOOT
+# -------------------------------------------------------------------
+
+if [ -b /dev/$sdcard ]; then
+    # Test if requested drive is removable, we do not want to erase fixed drive !
+    ISREMOVABLE=`udevadm info -a -n /dev/${sdcard} | grep -o "ATTR{removable}==\"1\""`
+    if [ ! "${ISREMOVABLE}" = "ATTR{removable}==\"1\"" ] ; then
+		echo "/dev/${sdcard} IS NOT REMOVABLE DRIVE !, Exiting."
+		exit 0
+    fi
+else
+    echo "/dev/${sdcard} NOT FOUND !, Exiting."
+    exit 0
+fi
+
+
+echo -n "WARNING: SD card $sdcard WILL BE ERASED !, Continue (y/N)?  "
+read -n 1 ANSWER
+
+if [ ! "${ANSWER}" = "y" ] ; then
+    echo "."
+    echo "Canceled.."
+    exit 0
+fi
+
+
+umount ${sdcard}* > /dev/null 2>&1
+sleep 1
+
+echo ""
+echo "Creating bootable SD card $sdcard ..."
+echo ""
+echo "Erasing SD card..."
+dd if=/dev/zero of=/dev/${sdcard} bs=1M count=4 > /dev/null 2>&1
+sync
+sleep 2
+
+# Create msdos partition table
+echo ""
+echo "Creating new filesystem on $sdcard..."
+echo -e "o\nw" | fdisk /dev/${sdcard} > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "ERROR."
+    exit 0
+fi
+sync
+echo "  New filesystem created on SD card."
+
+echo ""
+echo "Partitioning SD card $sdcard..."
+
+if [ "${_boot_on_ext4}" = "yes" ] ; then
+    echo "  Creating ext4"
+    sext4=3072
+    if [ $ext4size == 0 ]; then
+		eext4=""
+    else
+		eext4=$(expr $ext4size \* 1024 \* 1024 / 512 + $sext4 - 1)
+    fi
+    echo -e "n\np\n1\n$sext4\n$eext4\nt\n83\nw" | fdisk /dev/${sdcard} > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+		echo "ERROR."
+		exit 0
+    fi
+else
+    sfat=3072
+    efat=$(expr $fatsize \* 1024 \* 1024 / 512 + $sfat - 1)
+    echo "  Creating fat & ext4"
+    sext4=$(expr $efat + 1)
+    if [ $ext4size == 0 ]; then
+		eext4=""
+    else
+		eext4=$(expr $ext4size \* 1024 \* 1024 / 512 + $sext4 - 1)
+    fi
+    echo -e "n\np\n1\n$sfat\n$efat\nn\np\n2\n$sext4\n$eext4\nt\n1\n6\nt\n2\n83\nw" | fdisk /dev/${sdcard} > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+		echo "ERROR."
+		exit 0
+    fi
+fi
+echo "  OK."
+sync
+sleep 2
+partprobe -s /dev/${sdcard} > /dev/null 2>&1
+
+#echo -e "p\nq\n" | fdisk /dev/${sdcard}
+
+echo ""
+echo "formatting partitions ..."
+if [ ! "${_boot_on_ext4}" = "yes" ] ; then
+    mkfs -t vfat -n BOOT -i $vfatuuid /dev/${sdcard}1 > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+		echo "ERROR formatting fat partition."
+		exit 0
+    fi
+    echo "vfat partition formatted."
+    sync
+    echo ""
+    partprobe -s /dev/${sdcard} > /dev/null 2>&1
+    sleep 2
+    mkfs -F -t ext4 -L linux -U $ext4uuid /dev/${sdcard}2 > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+		echo "ERROR formatting ext4 partition."
+		exit 0
+    fi
+else
+    mkfs -F -t ext4 -L linux -U $ext4uuid /dev/${sdcard}1 > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+		echo "ERROR formatting ext4 partition."
+		exit 0
+    fi
+fi
+
+echo "ext4 partition formatted."
+partprobe -s /dev/${sdcard} > /dev/null 2>&1
+sleep 2
+sync
+
+echo ""
+echo "installing u-boot to $sdcard ..."
+dd if=$BL1 of=/dev/${sdcard} bs=1 count=442 > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "ERROR installing u-boot."
+    exit 0
+fi
+dd if=$BL1 of=/dev/${sdcard} bs=512 skip=1 seek=1 > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "ERROR installing u-boot."
+    exit 0
+fi
+dd if=$UBOOT of=/dev/${sdcard} bs=512 seek=97 > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "ERROR installing u-boot."
+    exit 0
+fi
+sync
+
+echo "U-boot installed to $sdcard."
+# -------------------------------------------------------------------
+
+sleep 2
+mkdir _mnt_ > /dev/null 2>&1
+
+mount /dev/${sdcard}1 _mnt_
+
+if [ $? -ne 0 ]; then
+    echo "ERROR mounting partition."
+    exit 0
+fi
+
+if [ "${_boot_on_ext4}" = "yes" ] ; then
+    mkdir -p _mnt_/boot > /dev/null 2>&1
+    _bootd="_mnt_/boot/boot.ini"
+    _ul1="ext4load mmc 0:1 \${loadaddr} boot/uImage"
+    _ul2="ext4load mmc 0:1 \${initrd_loadaddr} boot/uInitrd"
+    _ul3="ext4load mmc 0:1 \${dtb_loadaddr} boot/meson64_odroidc2.dtb"
+else
+    _bootd="_mnt_/boot.ini"
+    _ul1="fatload mmc 0:1 \${loadaddr} uImage"
+    _ul2="fatload mmc 0:1 \${initrd_loadaddr} uInitrd"
+    _ul3="fatload mmc 0:1 \${dtb_loadaddr} meson64_odroidc2.dtb"
+fi
+
+. uboot_config.sh
+
+sync
+umount _mnt_ > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "SD CARD $sdcard PREPARED FOR ODROID-UBUNTU BOOT.!"
+    echo "ERROR unmounting partition."
+    exit 0
+fi
+rmdir _mnt_ > /dev/null 2>&1
+
+
+echo ""
+echo "SD CARD $sdcard PREPARED FOR ODROID-UBUNTU BOOT.!"
+    
+# -------------------------------------------------------------------
