@@ -336,8 +336,13 @@ echo "linux partition mounted to $odir"
 #-----------------------------------------------------------------------------------------------
 echo ""
 echo "Copying files to image ..."
+
 if [ ! "${_boot_on_ext4}" = "yes" ] ; then
     cp $idir/boot/* $bootdir
+    # Fix uInitrd naming
+    if [ ! -f "${bootdir}/uInitrd" ] ; then
+        mv $bootdir/uInitrd* $bootdir/uInitrd
+    fi
 fi
 rsync -r -t -p -o -g -x --delete -l -H -D --numeric-ids -s --stats $PWD/$idir/ $PWD/$odir/
 echo ""
