@@ -370,12 +370,12 @@ echo "tmpfs /tmp  tmpfs nodev,nosuid,mode=1777  0 0" >> $odir/etc/fstab
 # You can modify parameters
 # ******************************
 if [ "${_boot_on_ext4}" = "yes" ] ; then
-    _ul1="ext4load mmc 0:1 \${loadaddr} boot/uImage"
+    _ul1="ext4load mmc 0:1 \${loadaddr} boot/Image"
     _ul2="ext4load mmc 0:1 \${initrd_loadaddr} boot/uInitrd"
     _ul3="ext4load mmc 0:1 \${dtb_loadaddr} boot/meson64_odroidc2.dtb"
     _bootd="$odir/boot/boot.ini"
 else
-    _ul1="fatload mmc 0:1 \${loadaddr} uImage"
+    _ul1="fatload mmc 0:1 \${loadaddr} Image"
     _ul2="fatload mmc 0:1 \${initrd_loadaddr} uInitrd"
     _ul3="fatload mmc 0:1 \${dtb_loadaddr} meson64_odroidc2.dtb"
     _bootd="$bootdir/boot.ini"

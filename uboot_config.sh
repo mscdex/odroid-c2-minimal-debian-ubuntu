@@ -64,8 +64,9 @@ setenv m_bpp "32"
 # HDMI DVI/VGA modes
 # Uncomment only a single Line! The line with setenv written.
 # At least one mode must be selected.
-setenv vout "dvi"
+# setenv vout "dvi"
 # setenv vout "vga"
+setenv vout "hdmi"
 
 # HDMI HotPlug Detection control
 # Allows you to force HDMI thinking that the cable is connected.
@@ -76,6 +77,18 @@ setenv hpd "true"
 
 # Default Console Device Setting
 setenv condev "console=ttyS0,115200n8 console=tty0"   # on both
+
+# Meson Timer
+# 1 - Meson Timer
+# 0 - Arch Timer 
+# Using meson_timer improves the video playback whoever it breaks KVM (virtualization).
+# Using arch timer allows KVM/Virtualization to work however you'll experience poor video
+setenv mesontimer "1"
+
+# Server Mode (aka. No Graphics)
+# Setting nographics to 1 will disable all video subsystem
+# This mode is ideal of server type usage. (Saves ~300Mb of RAM)
+setenv nographics "0"
 
 # Set Linux partition UUID
 setenv linuuid "$ext4uuid"
@@ -93,6 +106,12 @@ setenv initrd_loadaddr "0x13000000"
 $_ul1
 $_ul2
 $_ul3
+fdt addr \${dtb_loadaddr}
+
+if test "\${mesontimer}" = "0"; then fdt rm /meson_timer; fdt rm /cpus/cpu@0/timer; fdt rm /cpus/cpu@1/timer; fdt rm /cpus/cpu@2/timer; fdt rm /cpus/cpu@3/timer; fi
+if test "\${mesontimer}" = "1"; then fdt rm /timer; fi
+if test "\${nographics}" = "1"; then fdt rm /reserved-memory; fdt rm /aocec; fi
+
 
 booti \${loadaddr} \${initrd_loadaddr} \${dtb_loadaddr}
 _EOF_

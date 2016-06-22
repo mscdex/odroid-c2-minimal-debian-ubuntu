@@ -223,12 +223,12 @@ fi
 if [ "${_boot_on_ext4}" = "yes" ] ; then
     mkdir -p _mnt_/boot > /dev/null 2>&1
     _bootd="_mnt_/boot/boot.ini"
-    _ul1="ext4load mmc 0:1 \${loadaddr} boot/uImage"
+    _ul1="ext4load mmc 0:1 \${loadaddr} boot/Image"
     _ul2="ext4load mmc 0:1 \${initrd_loadaddr} boot/uInitrd"
     _ul3="ext4load mmc 0:1 \${dtb_loadaddr} boot/meson64_odroidc2.dtb"
 else
     _bootd="_mnt_/boot.ini"
-    _ul1="fatload mmc 0:1 \${loadaddr} uImage"
+    _ul1="fatload mmc 0:1 \${loadaddr} Image"
     _ul2="fatload mmc 0:1 \${initrd_loadaddr} uInitrd"
     _ul3="fatload mmc 0:1 \${dtb_loadaddr} meson64_odroidc2.dtb"
 fi
